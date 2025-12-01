@@ -301,6 +301,33 @@ def compile_all_data():
     return all_data
 
 
+def get_s2_orbital_parameters():
+    """
+    Get published orbital parameters for star S2 (S0-2) around Sagittarius A*.
+    These are well-established values from observational studies.
+    
+    Returns:
+    --------
+    dict : Dictionary containing all orbital parameters
+    """
+    # Published orbital parameters for S2 from recent studies
+    # Source: GRAVITY Collaboration et al. (2020) and subsequent observations
+    # Note: T0 is the most recent pericenter passage (May 2018)
+    orbital_params = {
+        'a': 0.1255,  # Semi-major axis in arcseconds
+        'e': 0.88466,  # Eccentricity (dimensionless)
+        'i': 134.567,  # Inclination in degrees
+        'Omega': 226.94,  # Longitude of ascending node in degrees
+        'omega': 66.32,  # Argument of periapsis in degrees
+        'P': 16.0518,  # Orbital period in years
+        'T0': 2018.38,  # Time of pericenter passage (year) - May 2018
+        'M_bh': 4.154e6,  # Mass of Sgr A* in solar masses
+        'distance_gc': 8.178,  # Distance to Galactic Center in kiloparsecs
+    }
+    
+    return orbital_params
+
+
 def save_data_to_files(data_dict, prefix="sgr_a_s2_data"):
     """
     Save all retrieved data to CSV files.
