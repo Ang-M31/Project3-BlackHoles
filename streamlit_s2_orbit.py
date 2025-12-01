@@ -17,20 +17,8 @@ def get_s2_orbital_parameters():
     Get published orbital parameters for star S2 (S0-2) around Sagittarius A*.
     These values come from Project3_Code or use published defaults.
     """
-    try:
-        # Try to read and execute Project3_Code file
-        with open('Project3_Code', 'r', encoding='utf-8') as f:
-            code = f.read()
-            # Create a namespace for execution
-            namespace = {}
-            exec(code, namespace)
-            if 'get_s2_orbital_parameters' in namespace:
-                return namespace['get_s2_orbital_parameters']()
-    except Exception:
-        pass
-    
-    # Default published values if import fails
-    return {
+    # Default published values (used if Project3_Code can't be loaded)
+    default_params = {
         'a': 0.1255,  # Semi-major axis in arcseconds
         'e': 0.88466,  # Eccentricity
         'i': 134.567,  # Inclination in degrees
@@ -41,6 +29,31 @@ def get_s2_orbital_parameters():
         'M_bh': 4.154e6,  # Mass of Sgr A* in solar masses
         'distance_gc': 8.178,  # Distance to Galactic Center in kiloparsecs
     }
+    
+    try:
+        # Try to read and execute Project3_Code file
+        with open('Project3_Code', 'r', encoding='utf-8') as f:
+            code = f.read()
+            # Create a namespace for execution with mock imports for astroquery
+            namespace = {
+                '__builtins__': __builtins__,
+                # Mock astroquery modules to prevent import errors
+                'astroquery': type('MockAstroquery', (), {}),
+            }
+            # Suppress import errors during execution
+            try:
+                exec(code, namespace)
+                if 'get_s2_orbital_parameters' in namespace:
+                    return namespace['get_s2_orbital_parameters']()
+            except (ImportError, ModuleNotFoundError):
+                # If astroquery is not available, use defaults
+                pass
+    except (FileNotFoundError, IOError, Exception):
+        # If file can't be read or executed, use defaults
+        pass
+    
+    # Return default values
+    return default_params
 
 # Page configuration
 st.set_page_config(
