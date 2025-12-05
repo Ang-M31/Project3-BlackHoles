@@ -5,7 +5,7 @@ from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 from scipy.constants import c, G
 
 st.set_page_config(
-    page_title="Black Hole Calculator",
+    page_title="Schwarzschild Radius",
     page_icon="🕳️",
     layout="wide"
 )
@@ -26,7 +26,7 @@ st.sidebar.header("Black Hole Estimator")
 mass_solar = st.sidebar.number_input(
     "Mass (Solar Masses)",
     min_value=0.1,
-    max_value=1000000.0,
+    max_value=4000000.0,
     value=10.0,
     step=0.1,
     help="Mass of the black hole in solar masses"
@@ -36,8 +36,8 @@ st.sidebar.markdown(
     "- Typical star: 1 M☉  \n"
     "- Massive star: 20 M☉  \n"
     "- Stellar black hole: 50 M☉  \n"
-    "- Intermediate BH: 10⁴ M☉  \n"
-    "- Sagittarius A*: 4.3×10⁶ M☉"
+    "- Intermediate black hole: 10⁴ M☉  \n"
+    "- Black hole S2 Orbits: 4.3×10⁶ M☉"
 )
 
 # Calculate properties
@@ -76,6 +76,7 @@ col1, col2 = st.columns(2)
 
 with col1:
     st.header("Properties")
+    st.markdown("*This calculator uses simplified models. Real black holes may have rotation and charge.*")
     
     st.metric(
         "Schwarzschild Radius",
@@ -94,6 +95,7 @@ with col1:
 
 with col2:
     st.header("Visualization")
+    st.markdown(f"*This event horizon radius is {relative_size}, making the entire diameter ≈ {2 * schwarzschild_radius_km:.2f} km.*")
     
     # Create a 3D visualization
     fig = plt.figure(figsize=(8, 8))
@@ -131,10 +133,3 @@ with col2:
     ax.view_init(elev=25, azim=35)
     
     st.pyplot(fig)
-    st.caption(
-        f"This event horizon radius is {relative_size}, making the entire diameter "
-        f"≈ {2 * schwarzschild_radius_km:.2f} km."
-    )
-
-# Footer
-st.markdown("**Note:** This calculator uses simplified models. Real black holes may have rotation and charge.")
