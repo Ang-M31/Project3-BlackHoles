@@ -1,16 +1,23 @@
 """
-Streamlit App: Animated 2D Visualization of Star S2's Orbit Around the Black Hole at the center of the Milky Way*
-This app uses orbital parameters to create a moving visualization of S2's orbit.
+Streamlit App: Visualization of Star S2's Orbit Around the Black Hole at the center of the Milky Way
+This app displays GRAVITY Collaboration observational data with error bars and calculated orbital model.
 """
 
 import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 from scipy.constants import c, G
-import time
-import sys
+import pandas as pd
 import os
+import re
+
+# Try to import astropy for coordinate transformations
+try:
+    from astropy.coordinates import SkyCoord
+    from astropy import units as u
+    HAS_ASTROPY = True
+except ImportError:
+    HAS_ASTROPY = False
 
 # Try to import from Project3_Code
 def get_s2_orbital_parameters():
@@ -56,6 +63,158 @@ def get_s2_orbital_parameters():
     # Return default values
     return default_params
 
+def icrs_to_galactic(ra_arcsec, dec_arcsec, ra_err_arcsec=None, dec_err_arcsec=None):
+    """
+    Convert ICRS (equatorial) coordinates to Galactic coordinates.
+    
+    Parameters:
+    - ra_arcsec: Right Ascension in arcseconds (relative to Sgr A*)
+    - dec_arcsec: Declination in arcseconds (relative to Sgr A*)
+    - ra_err_arcsec: RA error in arcseconds (optional)
+    - dec_err_arcsec: Dec error in arcseconds (optional)
+    
+    Returns:
+    - l_arcsec, b_arcsec: Galactic longitude and latitude in arcseconds
+    - l_err_arcsec, b_err_arcsec: Errors (if provided)
+    """
+    if HAS_ASTROPY:
+        # Sgr A* position in ICRS
+        sgr_a_ra = 266.4168 * u.degree
+        sgr_a_dec = -29.0078 * u.degree
+        
+        # Convert arcseconds to degrees and add to Sgr A* position
+        ra_deg = sgr_a_ra.value + ra_arcsec / 3600.0
+        dec_deg = sgr_a_dec.value + dec_arcsec / 3600.0
+        
+        # Create SkyCoord in ICRS
+        coord = SkyCoord(ra=ra_deg * u.degree, dec=dec_deg * u.degree, frame='icrs')
+        
+        # Convert to galactic
+        gal_coord = coord.galactic
+        
+        # Sgr A* in galactic coordinates (approximately l=0, b=0)
+        sgr_a_gal = SkyCoord(ra=sgr_a_ra, dec=sgr_a_dec, frame='icrs').galactic
+        
+        # Calculate relative position in arcseconds
+        l_diff = (gal_coord.l - sgr_a_gal.l).to(u.arcsec).value
+        b_diff = (gal_coord.b - sgr_a_gal.b).to(u.arcsec).value
+        
+        # For errors, approximate transformation (simplified)
+        if ra_err_arcsec is not None and dec_err_arcsec is not None:
+            # Rough approximation: errors scale similarly
+            l_err = np.sqrt(ra_err_arcsec**2 + dec_err_arcsec**2) * 0.7  # Approximate
+            b_err = np.sqrt(ra_err_arcsec**2 + dec_err_arcsec**2) * 0.7
+            return l_diff, b_diff, l_err, b_err
+        
+        return l_diff, b_diff
+    else:
+        # Fallback: return ICRS coordinates if astropy not available
+        if ra_err_arcsec is not None and dec_err_arcsec is not None:
+            return ra_arcsec, dec_arcsec, ra_err_arcsec, dec_err_arcsec
+        return ra_arcsec, dec_arcsec
+
+def load_fits_table_data(use_galactic=False):
+    """
+    Load observational data from gravity_fits_table.csv.
+    Returns DataFrame with ra, dec, ra_err, dec_err in arcseconds.
+    If use_galactic=True, converts to galactic coordinates (l, b).
+    """
+    if not os.path.exists('gravity_fits_table.csv'):
+        return None
+    
+    try:
+        df = pd.read_csv('gravity_fits_table.csv')
+        
+        # Find alpha and delta columns (handle Unicode and ASCII variants)
+        alpha_col = None
+        delta_col = None
+        
+        for col in df.columns:
+            col_lower = col.lower().strip()
+            # Check for alpha/RA column
+            if 'α' in col or 'alpha' in col_lower or 'ra' in col_lower:
+                if 'mas' in col_lower or 'mas' in col:
+                    alpha_col = col
+            # Check for delta/Dec column
+            if 'δ' in col or 'delta' in col_lower or 'dec' in col_lower:
+                if 'mas' in col_lower or 'mas' in col:
+                    delta_col = col
+        
+        if alpha_col is None or delta_col is None:
+            return None
+        
+        # Extract values and errors from "value ± error" format
+        def parse_value_error(s):
+            """Parse 'value ± error' string format."""
+            if pd.isna(s) or s == '' or s == '-':
+                return None, None
+            s = str(s).strip()
+            # Match pattern like "2.93 ± 0.55" or "3.21 ± 0.58"
+            match = re.match(r'([+-]?\d+\.?\d*)\s*±\s*([+-]?\d+\.?\d*)', s)
+            if match:
+                value = float(match.group(1))
+                error = float(match.group(2))
+                return value, error
+            return None, None
+        
+        # Parse alpha and delta columns
+        ra_values = []
+        ra_errors = []
+        dec_values = []
+        dec_errors = []
+        
+        for idx, row in df.iterrows():
+            ra_val, ra_err = parse_value_error(row[alpha_col])
+            dec_val, dec_err = parse_value_error(row[delta_col])
+            
+            if ra_val is not None and dec_val is not None:
+                # Convert mas to arcseconds
+                ra_values.append(ra_val / 1000.0)
+                ra_errors.append(ra_err / 1000.0)
+                dec_values.append(dec_val / 1000.0)
+                dec_errors.append(dec_err / 1000.0)
+        
+        if len(ra_values) == 0:
+            return None
+        
+        # Create DataFrame
+        obs_data = pd.DataFrame({
+            'ra': ra_values,
+            'dec': dec_values,
+            'ra_err': ra_errors,
+            'dec_err': dec_errors
+        })
+        
+        # Convert to galactic coordinates if requested
+        if use_galactic:
+            l_values = []
+            b_values = []
+            l_errors = []
+            b_errors = []
+            
+            for idx, row in obs_data.iterrows():
+                l, b, l_err, b_err = icrs_to_galactic(
+                    row['ra'], row['dec'],
+                    row['ra_err'], row['dec_err']
+                )
+                l_values.append(l)
+                b_values.append(b)
+                l_errors.append(l_err)
+                b_errors.append(b_err)
+            
+            obs_data = pd.DataFrame({
+                'ra': l_values,  # Reuse 'ra' column for galactic l
+                'dec': b_values,  # Reuse 'dec' column for galactic b
+                'ra_err': l_errors,  # Reuse 'ra_err' for l_err
+                'dec_err': b_errors  # Reuse 'dec_err' for b_err
+            })
+        
+        return obs_data
+    
+    except Exception as e:
+        st.warning(f"Error loading fits table: {e}")
+        return None
+
 # Page configuration
 st.set_page_config(
     page_title="S2 Orbit Visualization",
@@ -64,10 +223,6 @@ st.set_page_config(
 )
 
 st.title("Star S2 (S0-2) Orbit Around the Black Hole at the center of the Milky Way")
-st.markdown("""
-This visualization shows the orbit of star S2 around the supermassive black hole at the center of the Milky Way 
-at the center of our Milky Way galaxy. The orbit is highly elliptical with a period of ~16 years.
-""")
 
 # Get orbital parameters
 try:
@@ -86,7 +241,7 @@ except Exception as e:
         'distance_gc': 8.178,  # kiloparsecs
     }
 
-# Extract orbital parameters (read-only, fixed values)
+# Extract orbital parameters
 a = params['a']
 e = params['e']
 i_deg = params['i']
@@ -95,131 +250,50 @@ omega_deg = params['omega']
 P = params['P']
 T0 = params['T0']
 
-# ============================================================================
-# SIDEBAR: Animation Controls
-# ============================================================================
-st.sidebar.header("🎬 Animation Controls")
+# Initialize session state for display options
+if 'show_calculated_orbit' not in st.session_state:
+    st.session_state.show_calculated_orbit = False
+if 'show_table_data' not in st.session_state:
+    st.session_state.show_table_data = False
+if 'show_table_data_2' not in st.session_state:
+    st.session_state.show_table_data_2 = False
 
-# Initialize session state for animation
-if 'is_playing' not in st.session_state:
-    st.session_state.is_playing = False
-if 'current_time' not in st.session_state:
-    st.session_state.current_time = 2024.0
-if 'last_update' not in st.session_state:
-    st.session_state.last_update = time.time()
-if 'show_orbital_params' not in st.session_state:
-    st.session_state.show_orbital_params = False
+# Display options buttons
+col_btn1, col_btn2, col_btn3 = st.columns(3)
 
-# Animation speed selector
-speed_options = {
-    "Slow": 0.5,    # 0.5 years per second
-    "Medium": 2.0,  # 2 years per second
-    "Fast": 5.0     # 5 years per second
-}
+with col_btn1:
+    if st.button("Show Calculated Orbit", use_container_width=True, type="primary" if st.session_state.show_calculated_orbit else "secondary"):
+        st.session_state.show_calculated_orbit = True
+        st.session_state.show_table_data = False
+        st.session_state.show_table_data_2 = False
+        st.rerun()
 
-speed_selected = st.sidebar.radio(
-    "Animation Speed",
-    options=list(speed_options.keys()),
-    index=1,  # Default to Medium
-    help=f"Slow: {speed_options['Slow']} years/sec, Medium: {speed_options['Medium']} years/sec, Fast: {speed_options['Fast']} years/sec"
-)
-animation_speed = speed_options[speed_selected]
-st.sidebar.caption(f"**{speed_selected}**: {animation_speed} years/second")
+with col_btn2:
+    if st.button("Show Table Data - 1", use_container_width=True, type="primary" if st.session_state.show_table_data else "secondary"):
+        st.session_state.show_table_data = True
+        st.session_state.show_calculated_orbit = False
+        st.session_state.show_table_data_2 = False
+        st.rerun()
 
-# Play/Pause controls
-if st.sidebar.button("▶️ Play" if not st.session_state.is_playing else "⏸️ Pause", 
-             use_container_width=True, type="primary"):
-    st.session_state.is_playing = not st.session_state.is_playing
-    st.session_state.last_update = time.time()
-
-# Time controls
-st.sidebar.markdown("---")
-# Manual time control - if user moves slider, pause animation
-slider_time = st.sidebar.slider(
-    "Current Time (year)",
-    min_value=float(T0 - P),
-    max_value=float(T0 + P * 2),
-    value=float(st.session_state.current_time),
-    step=0.01,
-    format="%.2f",
-    key="time_slider"
-)
-# If slider changed, update time and pause
-if abs(slider_time - st.session_state.current_time) > 0.001:
-    st.session_state.current_time = slider_time
-    st.session_state.is_playing = False
-
-# Reset button
-if st.sidebar.button("🔄 Reset to T₀", use_container_width=True):
-    st.session_state.current_time = T0
-    st.session_state.is_playing = False
-    st.rerun()
-
-# Button to show orbital parameters at paused point (only when paused)
-st.sidebar.markdown("---")
-if not st.session_state.is_playing:
-    if st.sidebar.button("📊 Show Orbital Parameters", use_container_width=True):
-        st.session_state.show_orbital_params = not st.session_state.show_orbital_params
-else:
-    st.sidebar.caption("⏸️ Pause animation to view orbital parameters")
-
-# Update time if playing
-if st.session_state.is_playing:
-    current_time_actual = time.time()
-    elapsed = current_time_actual - st.session_state.last_update
-    time_delta = elapsed * animation_speed
-    st.session_state.current_time += time_delta
-    st.session_state.last_update = current_time_actual
-    
-    # Wrap around if beyond one period
-    if st.session_state.current_time > T0 + P:
-        st.session_state.current_time = T0
-    elif st.session_state.current_time < T0:
-        st.session_state.current_time = T0
-    
-    # Auto-rerun to update animation (small delay to control frame rate)
-    time.sleep(0.05)  # ~20 fps
-    st.rerun()
-
-st.sidebar.markdown("---")
-st.sidebar.header("Display Options")
-
-num_points = st.sidebar.slider(
-    "Number of points in orbit",
-    min_value=50,
-    max_value=1000,
-    value=500,
-    step=50
-)
-
-show_trail = st.sidebar.checkbox("Show orbital trail", value=True)
-show_ellipse = st.sidebar.checkbox("Show orbital ellipse", value=True)
-show_schwarzschild = st.sidebar.checkbox("Show Schwarzschild radius", value=True)
+with col_btn3:
+    if st.button("Show Table Data - 2", use_container_width=True, type="primary" if st.session_state.show_table_data_2 else "secondary"):
+        st.session_state.show_table_data_2 = True
+        st.session_state.show_calculated_orbit = False
+        st.session_state.show_table_data = False
+        st.rerun()
 
 # Convert angles to radians
 i = np.radians(i_deg)
 Omega = np.radians(Omega_deg)
 omega = np.radians(omega_deg)
 
-# Constants (using scipy.constants like the first app)
+# Constants
 M_sun = 1.989e30  # kg
 pc_to_m = 3.085677581e16  # meters
 arcsec_to_rad = np.pi / (180 * 3600)  # radians per arcsecond
 
 # Distance to Galactic Center
 distance_gc_m = params['distance_gc'] * 1000 * pc_to_m
-
-# Calculate Schwarzschild radius for Sgr A* (using same method as streamlit_app.py)
-# Mass: 4 million solar masses = 4e6 * 1.989e30 kg
-M_bh_kg = params['M_bh'] * M_sun  # Mass of Sgr A* in kg
-schwarzschild_radius = (2 * G * M_bh_kg) / (c ** 2)  # Schwarzschild radius in meters
-schwarzschild_radius_km = schwarzschild_radius / 1000
-
-# Convert Schwarzschild radius to arcseconds
-# Formula: angle (rad) = radius / distance, then convert rad to arcsec
-# angle_rad = schwarzschild_radius / distance_gc_m
-# angle_arcsec = angle_rad / arcsec_to_rad
-r_schwarzschild_arcsec = (schwarzschild_radius / distance_gc_m) / arcsec_to_rad
 
 # Convert semi-major axis from arcseconds to meters
 a_arcsec = a
@@ -229,9 +303,6 @@ a_m = a_rad * distance_gc_m
 # Calculate mean motion (n = 2π/P)
 P_seconds = P * 365.25 * 24 * 3600
 n = 2 * np.pi / P_seconds  # rad/s
-
-# Time array for orbit calculation (already defined above, this is just for reference)
-# t_array is calculated above after getting orbital parameters
 
 # Reference time (T0) in seconds since year 2000
 T0_seconds = (T0 - 2000.0) * 365.25 * 24 * 3600
@@ -296,261 +367,204 @@ def calculate_orbit_positions(times):
     
     return x_sky, y_sky, times
 
-# Calculate full orbit for trail
-# Time array for full orbit visualization
-t_start = (T0 - P - 2000.0) * 365.25 * 24 * 3600
-t_end = (T0 + P * 2 - 2000.0) * 365.25 * 24 * 3600
-t_array = np.linspace(t_start, t_end, num_points)
-x_full, y_full, t_full = calculate_orbit_positions(t_array)
+# Create column layout: graph on left, info on right
+col_viz, col_info = st.columns([1, 1])
 
-# Current time for animation (from session state)
-current_year = st.session_state.current_time
-t_current = (current_year - 2000.0) * 365.25 * 24 * 3600
-
-# Calculate full 3D orbit positions function
-def calculate_orbit_positions_3d(times):
-    """Calculate x, y, z positions in 3D space for given times."""
-    # Mean anomaly: M = n(t - T0)
-    M = n * (times - T0_seconds)
+with col_viz:
+    # Create 2D figure
+    fig, ax = plt.subplots(figsize=(10, 8))
     
-    # Solve Kepler's equation: E = M + e*sin(E) using Newton's method
-    E = M.copy()  # Initial guess
-    for _ in range(20):  # Iterate to solve
-        E = M + e * np.sin(E)
+    # Load observational data if showing table data
+    obs_data = None
+    use_galactic = False
+    coord_label_x = 'Right Ascension Difference (")'
+    coord_label_y = 'Declination Difference (")'
     
-    # True anomaly: ν = 2*arctan(sqrt((1+e)/(1-e)) * tan(E/2))
-    nu = 2 * np.arctan2(
-        np.sqrt(1 + e) * np.sin(E / 2),
-        np.sqrt(1 - e) * np.cos(E / 2)
-    )
+    if st.session_state.show_table_data:
+        obs_data = load_fits_table_data(use_galactic=False)
+    elif st.session_state.show_table_data_2:
+        obs_data = load_fits_table_data(use_galactic=True)
+        use_galactic = True
+        coord_label_x = 'Galactic Longitude Difference (")'
+        coord_label_y = 'Galactic Latitude Difference (")'
     
-    # Distance from focus: r = a(1 - e²) / (1 + e*cos(ν))
-    r = a_m * (1 - e**2) / (1 + e * np.cos(nu))
+    # Calculate full orbit for trail (if showing calculated orbit)
+    if st.session_state.show_calculated_orbit:
+        # Time array for full orbit visualization
+        t_start = (T0 - P - 2000.0) * 365.25 * 24 * 3600
+        t_end = (T0 + P * 2 - 2000.0) * 365.25 * 24 * 3600
+        num_points = 500
+        t_array = np.linspace(t_start, t_end, num_points)
+        x_full, y_full, _ = calculate_orbit_positions(t_array)
+        
+        # Plot full orbit trail
+        ax.plot(x_full, y_full, 'b-', alpha=0.7, linewidth=2, label='Calculated Orbit')
+        
+        # Mark pericenter (closest approach)
+        t_peri = T0_seconds
+        x_peri, y_peri, _ = calculate_orbit_positions(np.array([t_peri]))
+        ax.scatter([x_peri[0]], [y_peri[0]], 
+                  c='green', s=150, marker='^', label='Pericenter (closest)', zorder=5)
+        
+        # Mark apocenter (farthest point)
+        t_apo = T0_seconds + P_seconds / 2
+        x_apo, y_apo, _ = calculate_orbit_positions(np.array([t_apo]))
+        ax.scatter([x_apo[0]], [y_apo[0]], 
+                  c='blue', s=150, marker='v', label='Apocenter (farthest)', zorder=5)
     
-    # Position in orbital plane (x along major axis, y along minor axis)
-    x_orb = r * np.cos(nu)
-    y_orb = r * np.sin(nu)
-    z_orb = np.zeros_like(x_orb)
+    # Plot observational data with error bars (if showing table data)
+    if (st.session_state.show_table_data or st.session_state.show_table_data_2) and obs_data is not None:
+        # Account for jitter by reducing error bars (multiply by 0.5)
+        ra_err_plot = obs_data['ra_err'].values * 0.5
+        dec_err_plot = obs_data['dec_err'].values * 0.5
+        
+        # Label for observations
+        if use_galactic:
+            label_text = 'GRAVITY Observations (Galactic)'
+        else:
+            label_text = 'GRAVITY Observations'
+        
+        ax.errorbar(obs_data['ra'].values, obs_data['dec'].values,
+                   xerr=ra_err_plot, yerr=dec_err_plot,
+                   fmt='o', color='blue', markersize=6,
+                   capsize=2, capthick=1.0, elinewidth=1.0,
+                   label=label_text, zorder=4)
     
-    # Rotation matrices to transform from orbital plane to 3D space
-    # Rotation 1: Argument of periapsis (ω)
-    R_omega = np.array([
-        [np.cos(omega), -np.sin(omega), 0],
-        [np.sin(omega), np.cos(omega), 0],
-        [0, 0, 1]
-    ])
+    # Plot black hole center
+    ax.scatter([0], [0], c='black', s=100, marker='o', 
+              label='Black Hole Center (Sgr A*)', zorder=10, edgecolors='black', linewidths=1)
     
-    # Rotation 2: Inclination (i)
-    R_i = np.array([
-        [1, 0, 0],
-        [0, np.cos(i), -np.sin(i)],
-        [0, np.sin(i), np.cos(i)]
-    ])
+    # Set labels and title
+    ax.set_xlabel(coord_label_x, fontsize=12)
+    ax.set_ylabel(coord_label_y, fontsize=12)
+    ax.set_title('S2 Orbit Around the Black Hole at the center of the Milky Way', 
+                fontsize=14, fontweight='bold')
     
-    # Rotation 3: Longitude of ascending node (Ω)
-    R_Omega = np.array([
-        [np.cos(Omega), -np.sin(Omega), 0],
-        [np.sin(Omega), np.cos(Omega), 0],
-        [0, 0, 1]
-    ])
+    # Set axis limits based on which view is selected
+    if (st.session_state.show_table_data or st.session_state.show_table_data_2) and obs_data is not None:
+        # For table data: use limits based on actual data points with padding for error bars
+        ra_min = (obs_data['ra'].values - obs_data['ra_err'].values * 0.5).min()
+        ra_max = (obs_data['ra'].values + obs_data['ra_err'].values * 0.5).max()
+        dec_min = (obs_data['dec'].values - obs_data['dec_err'].values * 0.5).min()
+        dec_max = (obs_data['dec'].values + obs_data['dec_err'].values * 0.5).max()
+        
+        # Add padding (30% on each side for better visibility)
+        ra_range = ra_max - ra_min
+        dec_range = dec_max - dec_min
+        ra_padding = ra_range * 0.3 if ra_range > 0 else 0.01
+        dec_padding = dec_range * 0.3 if dec_range > 0 else 0.01
+        
+        # Use the larger range for both axes to maintain aspect ratio
+        max_data_range = max(ra_range + 2*ra_padding, dec_range + 2*dec_padding, 0.02)  # Minimum 0.02 arcsec
+        center_ra = (ra_max + ra_min) / 2
+        center_dec = (dec_max + dec_min) / 2
+        
+        # Set limits normally (will be inverted below)
+        ax.set_xlim(center_ra - max_data_range/2, center_ra + max_data_range/2)
+        ax.set_ylim(center_dec - max_data_range/2, center_dec + max_data_range/2)
+    else:
+        # For calculated orbit: use limits based on orbital parameters
+        max_range = a * (1 + e) * 1.2  # Slightly larger than apocenter
+        ax.set_xlim(-max_range, max_range)
+        ax.set_ylim(-max_range, max_range)
     
-    # Combined rotation: R = R_Ω * R_i * R_ω
-    R = R_Omega @ R_i @ R_omega
+    ax.invert_xaxis()  # Flip x-axis: positive to negative
     
-    # Transform positions
-    pos_orb = np.vstack([x_orb, y_orb, z_orb])
-    pos_3d = R @ pos_orb
+    ax.grid(True, alpha=0.3)
+    ax.set_aspect('equal')
+    ax.legend(loc='upper left', fontsize=10, bbox_to_anchor=(0, 1),
+             borderpad=1.0, labelspacing=1.2, columnspacing=1.5,
+             frameon=True, fancybox=True, shadow=True)
     
-    # Convert to arcseconds for display
-    x_3d = pos_3d[0, :] / distance_gc_m / arcsec_to_rad
-    y_3d = pos_3d[1, :] / distance_gc_m / arcsec_to_rad
-    z_3d = pos_3d[2, :] / distance_gc_m / arcsec_to_rad
+    st.pyplot(fig, use_container_width=True)
     
-    return x_3d, y_3d, z_3d, times
+    # Show message if no data is displayed
+    if (st.session_state.show_table_data or st.session_state.show_table_data_2) and obs_data is None:
+        st.warning("No observational data found. Please ensure gravity_fits_table.csv exists.")
+    
+    # About Star S2 section (moved to left column)
+    st.header("About Star S2 (S0-2)")
+    st.markdown("""
+    Star S2 (also known as S0-2) is one of the closest stars to the supermassive black hole 
+    at the center of our Milky Way galaxy. Its highly elliptical orbit has been carefully monitored for decades, 
+    providing crucial evidence for the existence of a supermassive black hole.
+    
+    **Key Facts:**
+    - **Orbital Period:** {P:.2f} years
+    - **Closest Approach:** {peri_distance_AU:.1f} AU from Sgr A* (at pericenter)
+    - **Farthest Distance:** {apo_distance_AU:.1f} AU from Sgr A* (at apocenter)
+    - **Eccentricity:** {e:.5f}
+    - **Last Pericenter Passage:** May 2018 (T₀ ≈ {T0:.2f})
+    
+    The orbit of S2 has been used to:
+    1. Measure the mass of Sgr A* (~4 million solar masses)
+    2. Test predictions of general relativity (gravitational redshift, orbital precession)
+    3. Constrain the distance to the Galactic Center
+    """.format(
+        P=P,
+        peri_distance_AU=(a * (1 - e) * arcsec_to_rad * distance_gc_m) / (1.496e11),  # Convert to AU
+        apo_distance_AU=(a * (1 + e) * arcsec_to_rad * distance_gc_m) / (1.496e11),  # Convert to AU
+        e=e,
+        T0=T0
+    ))
 
-# Main visualization
-st.header("Orbital Visualization (3D)")
-
-# Create 3D figure
-fig = plt.figure(figsize=(12, 10))
-ax = fig.add_subplot(111, projection='3d')
-
-# Calculate full 3D orbit
-x_full_3d, y_full_3d, z_full_3d, _ = calculate_orbit_positions_3d(t_array)
-
-# Plot full orbit trail
-if show_trail:
-    ax.plot(x_full_3d, y_full_3d, z_full_3d, 'b-', alpha=0.3, linewidth=1, label='Orbit trail')
-
-# Plot orbital ellipse outline
-if show_ellipse:
-    t_ellipse = np.linspace(0, P_seconds, 1000)
-    x_ellipse, y_ellipse, z_ellipse, _ = calculate_orbit_positions_3d(t_ellipse + T0_seconds)
-    ax.plot(x_ellipse, y_ellipse, z_ellipse, 'g--', linewidth=1, alpha=0.4, label='Orbital ellipse')
-
-# Plot transparent yellow sphere extending to Schwarzschild radius
-# This represents the event horizon region around the black hole center
-# The sphere is centered at (0,0,0) with radius = Schwarzschild radius
-# Note: The Schwarzschild radius is extremely small (microarcseconds), so it may appear as a point
-u_yellow = np.linspace(0, 2 * np.pi, 40)
-v_yellow = np.linspace(0, np.pi, 30)
-x_yellow = r_schwarzschild_arcsec * np.outer(np.cos(u_yellow), np.sin(v_yellow))
-y_yellow = r_schwarzschild_arcsec * np.outer(np.sin(u_yellow), np.sin(v_yellow))
-z_yellow = r_schwarzschild_arcsec * np.outer(np.ones_like(u_yellow), np.cos(v_yellow))
-# Make it more visible with higher alpha and ensure it's always shown
-ax.plot_surface(x_yellow, y_yellow, z_yellow, color='yellow', alpha=0.4, 
-               linewidth=0, shade=False, label='Schwarzschild radius (yellow)')
-
-# Plot estimated black hole center at the center of the yellow Schwarzschild radius sphere
-# This dot represents the center of the 4 million solar mass black hole
-# Positioned at (0,0,0) which is the center of the yellow sphere
-ax.scatter([0], [0], [0], c='black', s=20, marker='o', label='Estimated Black Hole Center', 
-           edgecolors='black', linewidths=0.5, zorder=100)
-
-# Calculate current 3D position
-x_current_3d, y_current_3d, z_current_3d, _ = calculate_orbit_positions_3d(np.array([t_current]))
-
-# Plot current position of S2
-ax.scatter([x_current_3d[0]], [y_current_3d[0]], [z_current_3d[0]], 
-          c='red', s=200, marker='*', label=f'S2 (year {current_year:.2f})')
-ax.scatter([x_current_3d[0]], [y_current_3d[0]], [z_current_3d[0]], 
-          c='red', s=100, marker='o', alpha=0.5)
-
-# Mark pericenter (closest approach)
-t_peri = T0_seconds
-x_peri_3d, y_peri_3d, z_peri_3d, _ = calculate_orbit_positions_3d(np.array([t_peri]))
-ax.scatter([x_peri_3d[0]], [y_peri_3d[0]], [z_peri_3d[0]], 
-          c='green', s=150, marker='^', label='Pericenter (closest)')
-
-# Mark apocenter (farthest point)
-t_apo = T0_seconds + P_seconds / 2
-x_apo_3d, y_apo_3d, z_apo_3d, _ = calculate_orbit_positions_3d(np.array([t_apo]))
-ax.scatter([x_apo_3d[0]], [y_apo_3d[0]], [z_apo_3d[0]], 
-          c='red', s=150, marker='v', label='Apocenter (farthest)')
-
-# Set labels and title
-ax.set_xlabel('X position (arcseconds)', fontsize=12)
-ax.set_ylabel('Y position (arcseconds)', fontsize=12)
-ax.set_zlabel('Z position (arcseconds)', fontsize=12)
-ax.set_title(f'S2 Orbit Around the Black Hole at the center of the Milky Way (3D)\n(Current: {current_year:.2f} year)', 
-            fontsize=14, fontweight='bold')
-
-# Set reasonable axis limits
-max_range = a * (1 + e) * 1.2  # Slightly larger than apocenter
-ax.set_xlim(-max_range, max_range)
-ax.set_ylim(-max_range, max_range)
-ax.set_zlim(-max_range, max_range)
-
-# Set viewing angle
-ax.view_init(elev=20, azim=45)
-
-ax.legend(loc='upper left', fontsize=9, bbox_to_anchor=(0, 1))
-
-st.pyplot(fig)
-
-# Show orbital parameters in main section if button was clicked (only when paused)
-if st.session_state.show_orbital_params and not st.session_state.is_playing:
-    st.markdown("---")
-    st.header("📊 Orbital Parameters at Current Time")
+with col_info:
+    # Example Orbit image
+    # Try to load and display the image if it exists
+    image_paths = ['Figure1.png', 'example_orbit.png', 'example_orbit.jpg', 'example_orbit.jpeg', 's2_orbit_example.png', 's2_orbit_example.jpg']
+    image_found = False
+    for img_path in image_paths:
+        if os.path.exists(img_path):
+            # Center the title over the image
+            st.markdown('<p style="font-size:32px; font-weight:bold; text-align:center; margin-bottom:0.5em;">Example Orbit</p>', unsafe_allow_html=True)
+            # Center the image with larger size
+            col_img1, col_img2, col_img3 = st.columns([0.5, 3, 0.5])
+            with col_img2:
+                st.image(img_path)
+            image_found = True
+            break
+    
+    if not image_found:
+        # Placeholder if image not found
+        st.markdown('<p style="font-size:30px; font-weight:bold; text-align:center; margin-bottom:0.5em;">Example Orbit</p>', unsafe_allow_html=True)
+        st.info("Image file not found. Please add the example orbit image to the project directory.")
+    
+    st.markdown('<p style="font-size:10px; font-style:italic; text-align:center; margin-top:0.25em; margin-bottom:1.5em;">Credit: DOI:10.1007/978-3-642-74391-7_4</p>', unsafe_allow_html=True)
+    
+    # Orbital Information section
+    st.markdown("**Orbital Information**")
     
     # Calculate some orbital properties
     b_arcsec = a * np.sqrt(1 - e**2)  # Semi-minor axis
     peri_distance = a * (1 - e)  # Pericenter distance
     apo_distance = a * (1 + e)   # Apocenter distance
     
-    col_param1, col_param2 = st.columns(2)
+    # Compact table format
+    orbital_data = {
+        'Property': [
+            'Semi-major axis',
+            'Semi-minor axis',
+            'Eccentricity',
+            'Orbital period',
+            'Pericenter distance',
+            'Apocenter distance'
+        ],
+        'Value': [
+            f"{a:.4f} arcsec",
+            f"{b_arcsec:.4f} arcsec",
+            f"{e:.5f}",
+            f"{P:.2f} years",
+            f"{peri_distance:.4f} arcsec",
+            f"{apo_distance:.4f} arcsec"
+        ]
+    }
+    df_orbital = pd.DataFrame(orbital_data)
+    st.dataframe(df_orbital, use_container_width=True, hide_index=True)
     
-    with col_param1:
-        st.subheader("Orbital Properties")
-        st.metric("Semi-major axis", f"{a:.4f} arcsec")
-        st.metric("Semi-minor axis", f"{b_arcsec:.4f} arcsec")
-        st.metric("Eccentricity", f"{e:.5f}")
-        st.metric("Orbital period", f"{P:.2f} years")
-        st.metric("Pericenter distance", f"{peri_distance:.4f} arcsec")
-        st.metric("Apocenter distance", f"{apo_distance:.4f} arcsec")
-    
-    with col_param2:
-        st.subheader("Current Position (3D)")
-        # Calculate current 3D position for display
-        x_curr_3d, y_curr_3d, z_curr_3d, _ = calculate_orbit_positions_3d(np.array([t_current]))
-        st.metric("X position", f"{x_curr_3d[0]:.4f} arcsec")
-        st.metric("Y position", f"{y_curr_3d[0]:.4f} arcsec")
-        st.metric("Z position", f"{z_curr_3d[0]:.4f} arcsec")
-        
-        # Calculate distance from Sgr A*
-        r_current = np.sqrt(x_curr_3d[0]**2 + y_curr_3d[0]**2 + z_curr_3d[0]**2)
-        st.metric("Distance from Sgr A*", f"{r_current:.4f} arcsec")
-        
-        # Calculate time since pericenter
-        if t_current >= T0_seconds:
-            time_since_peri = (t_current - T0_seconds) / (365.25 * 24 * 3600)
-            st.metric("Time since pericenter", f"{time_since_peri:.2f} years")
-        else:
-            time_to_peri = (T0_seconds - t_current) / (365.25 * 24 * 3600)
-            st.metric("Time to next pericenter", f"{time_to_peri:.2f} years")
-    
-    st.markdown("---")
-    st.subheader("Orbital Elements")
-    col_elem1, col_elem2 = st.columns(2)
-    with col_elem1:
-        st.write(f"**Inclination (i):** {i_deg:.2f}°")
-        st.write(f"**Ω (longitude of ascending node):** {Omega_deg:.2f}°")
-    with col_elem2:
-        st.write(f"**ω (argument of periapsis):** {omega_deg:.2f}°")
-        st.write(f"**T₀ (pericenter passage):** {T0:.3f} year")
-
-# Orbital Information (moved to bottom)
-st.markdown("---")
-st.header("Orbital Information")
-
-# Calculate some orbital properties
-b_arcsec = a * np.sqrt(1 - e**2)  # Semi-minor axis
-peri_distance = a * (1 - e)  # Pericenter distance
-apo_distance = a * (1 + e)   # Apocenter distance
-
-col_info1, col_info2 = st.columns(2)
-
-with col_info1:
-    st.subheader("Orbital Properties")
-    st.metric("Semi-major axis", f"{a:.4f} arcsec")
-    st.metric("Semi-minor axis", f"{b_arcsec:.4f} arcsec")
-    st.metric("Eccentricity", f"{e:.5f}")
-    st.metric("Orbital period", f"{P:.2f} years")
-    st.metric("Pericenter distance", f"{peri_distance:.4f} arcsec")
-    st.metric("Apocenter distance", f"{apo_distance:.4f} arcsec")
-
-with col_info2:
-    st.subheader("Orbital Elements")
-    st.write(f"**Inclination (i):** {i_deg:.2f}°")
-    st.write(f"**Ω (longitude of ascending node):** {Omega_deg:.2f}°")
-    st.write(f"**ω (argument of periapsis):** {omega_deg:.2f}°")
-    st.write(f"**T₀ (pericenter passage):** {T0:.3f} year")
-    st.write(f"**Semi-major axis (a):** {a:.4f} arcsec")
-    st.write(f"**Eccentricity (e):** {e:.5f}")
-
-# Additional information
-st.markdown("---")
-st.header("About Star S2 (S0-2)")
-st.markdown("""
-Star S2 (also known as S0-2) is one of the closest stars to Sagittarius A*, the supermassive black hole 
-at the center of our Milky Way galaxy. Its highly elliptical orbit has been carefully monitored for decades, 
-providing crucial evidence for the existence of a supermassive black hole and testing Einstein's theory of 
-general relativity.
-
-**Key Facts:**
-- **Orbital Period:** ~16 years
-- **Closest Approach:** ~120 AU from Sgr A* (at pericenter)
-- **Farthest Distance:** ~2000 AU from Sgr A* (at apocenter)
-- **Eccentricity:** ~0.88 (highly elliptical)
-- **Last Pericenter Passage:** May 2018 (T₀ ≈ 2018.38)
-
-The orbit of S2 has been used to:
-1. Measure the mass of Sgr A* (~4 million solar masses)
-2. Test predictions of general relativity (gravitational redshift, orbital precession)
-3. Constrain the distance to the Galactic Center
-""")
+    # Orbital Elements in compact format
+    st.markdown("**Orbital Elements:**")
+    st.markdown(f"- **Inclination (i):** {i_deg:.2f}°  |  **Ω (longitude of ascending node):** {Omega_deg:.2f}°")
+    st.markdown(f"- **ω (argument of periapsis):** {omega_deg:.2f}°  |  **T₀ (pericenter passage):** {T0:.3f} year")
 
 # Footer
-st.markdown("---")
 st.caption("Data sources: GRAVITY Collaboration, ESO observations, and published orbital element catalogs")
-
