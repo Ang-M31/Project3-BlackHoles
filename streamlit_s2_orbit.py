@@ -257,29 +257,42 @@ if 'show_table_data' not in st.session_state:
     st.session_state.show_table_data = False
 if 'show_table_data_2' not in st.session_state:
     st.session_state.show_table_data_2 = False
+if 'show_table_data_3' not in st.session_state:
+    st.session_state.show_table_data_3 = False
 
 # Display options buttons
-col_btn1, col_btn2, col_btn3 = st.columns(3)
+col_btn1, col_btn2, col_btn3, col_btn4 = st.columns(4)
 
 with col_btn1:
     if st.button("Show Calculated Orbit", use_container_width=True, type="primary" if st.session_state.show_calculated_orbit else "secondary"):
         st.session_state.show_calculated_orbit = True
         st.session_state.show_table_data = False
         st.session_state.show_table_data_2 = False
+        st.session_state.show_table_data_3 = False
         st.rerun()
 
 with col_btn2:
-    if st.button("Show Table Data - 1", use_container_width=True, type="primary" if st.session_state.show_table_data else "secondary"):
+    if st.button("Version 1", use_container_width=True, type="primary" if st.session_state.show_table_data else "secondary"):
         st.session_state.show_table_data = True
         st.session_state.show_calculated_orbit = False
         st.session_state.show_table_data_2 = False
+        st.session_state.show_table_data_3 = False
         st.rerun()
 
 with col_btn3:
-    if st.button("Show Table Data - 2", use_container_width=True, type="primary" if st.session_state.show_table_data_2 else "secondary"):
+    if st.button("Version 2", use_container_width=True, type="primary" if st.session_state.show_table_data_2 else "secondary"):
         st.session_state.show_table_data_2 = True
         st.session_state.show_calculated_orbit = False
         st.session_state.show_table_data = False
+        st.session_state.show_table_data_3 = False
+        st.rerun()
+
+with col_btn4:
+    if st.button("Version 3", use_container_width=True, type="primary" if st.session_state.show_table_data_3 else "secondary"):
+        st.session_state.show_table_data_3 = True
+        st.session_state.show_calculated_orbit = False
+        st.session_state.show_table_data = False
+        st.session_state.show_table_data_2 = False
         st.rerun()
 
 # Convert angles to radians
@@ -387,6 +400,11 @@ with col_viz:
         use_galactic = True
         coord_label_x = 'Galactic Longitude Difference (")'
         coord_label_y = 'Galactic Latitude Difference (")'
+    elif st.session_state.show_table_data_3:
+        obs_data = load_fits_table_data(use_galactic=True)
+        use_galactic = True
+        coord_label_x = 'Galactic Longitude Difference (")'
+        coord_label_y = 'Galactic Latitude Difference (")'
     
     # Calculate full orbit for trail (if showing calculated orbit)
     if st.session_state.show_calculated_orbit:
@@ -413,7 +431,7 @@ with col_viz:
                   c='blue', s=150, marker='v', label='Apocenter (farthest)', zorder=5)
     
     # Plot observational data with error bars (if showing table data)
-    if (st.session_state.show_table_data or st.session_state.show_table_data_2) and obs_data is not None:
+    if (st.session_state.show_table_data or st.session_state.show_table_data_2 or st.session_state.show_table_data_3) and obs_data is not None:
         # Account for jitter by reducing error bars (multiply by 0.5)
         ra_err_plot = obs_data['ra_err'].values * 0.5
         dec_err_plot = obs_data['dec_err'].values * 0.5
@@ -424,9 +442,12 @@ with col_viz:
         else:
             label_text = 'GRAVITY Observations'
         
+        # For Version 3, use smaller markers
+        marker_size = 3 if st.session_state.show_table_data_3 else 6
+        
         ax.errorbar(obs_data['ra'].values, obs_data['dec'].values,
                    xerr=ra_err_plot, yerr=dec_err_plot,
-                   fmt='o', color='blue', markersize=6,
+                   fmt='o', color='blue', markersize=marker_size,
                    capsize=2, capthick=1.0, elinewidth=1.0,
                    label=label_text, zorder=4)
     
@@ -438,24 +459,36 @@ with col_viz:
     ax.set_xlabel(coord_label_x, fontsize=12)
     ax.set_ylabel(coord_label_y, fontsize=12)
     ax.set_title('S2 Orbit Around the Black Hole at the center of the Milky Way', 
-                fontsize=14, fontweight='bold')
+            fontsize=14, fontweight='bold')
     
     # Set axis limits based on which view is selected
-    if (st.session_state.show_table_data or st.session_state.show_table_data_2) and obs_data is not None:
+    if (st.session_state.show_table_data or st.session_state.show_table_data_2 or st.session_state.show_table_data_3) and obs_data is not None:
         # For table data: use limits based on actual data points with padding for error bars
-        ra_min = (obs_data['ra'].values - obs_data['ra_err'].values * 0.5).min()
-        ra_max = (obs_data['ra'].values + obs_data['ra_err'].values * 0.5).max()
-        dec_min = (obs_data['dec'].values - obs_data['dec_err'].values * 0.5).min()
-        dec_max = (obs_data['dec'].values + obs_data['dec_err'].values * 0.5).max()
+        # For Version 3, use full error bars instead of 0.5x to get better range
+        if st.session_state.show_table_data_3:
+            # Use full error bars for Version 3 to ensure proper axis range
+            ra_min = (obs_data['ra'].values - obs_data['ra_err'].values).min()
+            ra_max = (obs_data['ra'].values + obs_data['ra_err'].values).max()
+            dec_min = (obs_data['dec'].values - obs_data['dec_err'].values).min()
+            dec_max = (obs_data['dec'].values + obs_data['dec_err'].values).max()
+        else:
+            # For Version 1 and 2, use reduced error bars (0.5x) as before
+            ra_min = (obs_data['ra'].values - obs_data['ra_err'].values * 0.5).min()
+            ra_max = (obs_data['ra'].values + obs_data['ra_err'].values * 0.5).max()
+            dec_min = (obs_data['dec'].values - obs_data['dec_err'].values * 0.5).min()
+            dec_max = (obs_data['dec'].values + obs_data['dec_err'].values * 0.5).max()
         
-        # Add padding (30% on each side for better visibility)
+        # Add padding (30% on each side for better visibility, or 50% for Version 3)
         ra_range = ra_max - ra_min
         dec_range = dec_max - dec_min
-        ra_padding = ra_range * 0.3 if ra_range > 0 else 0.01
-        dec_padding = dec_range * 0.3 if dec_range > 0 else 0.01
+        padding_factor = 0.5 if st.session_state.show_table_data_3 else 0.3
+        ra_padding = ra_range * padding_factor if ra_range > 0 else 0.01
+        dec_padding = dec_range * padding_factor if dec_range > 0 else 0.01
         
         # Use the larger range for both axes to maintain aspect ratio
-        max_data_range = max(ra_range + 2*ra_padding, dec_range + 2*dec_padding, 0.02)  # Minimum 0.02 arcsec
+        # For Version 3, ensure minimum range is larger
+        min_range = 0.05 if st.session_state.show_table_data_3 else 0.02
+        max_data_range = max(ra_range + 2*ra_padding, dec_range + 2*dec_padding, min_range)
         center_ra = (ra_max + ra_min) / 2
         center_dec = (dec_max + dec_min) / 2
         
@@ -479,7 +512,7 @@ with col_viz:
     st.pyplot(fig, use_container_width=True)
     
     # Show message if no data is displayed
-    if (st.session_state.show_table_data or st.session_state.show_table_data_2) and obs_data is None:
+    if (st.session_state.show_table_data or st.session_state.show_table_data_2 or st.session_state.show_table_data_3) and obs_data is None:
         st.warning("No observational data found. Please ensure gravity_fits_table.csv exists.")
     
     # About Star S2 section (moved to left column)
